@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { render } from '@testing-library/react';
 import * as THREE from 'three';
+var OrbitControls = require('three-orbitcontrols');
 var TrackballControls = require('three-trackballcontrols');
-
+var d3 = require('d3-geo');
 
 interface Props {
     color: string;
@@ -24,6 +25,7 @@ interface Location {
 class Globe extends React.Component<Props, State> {
     private container: React.RefObject<HTMLDivElement>
     private globeModel: THREE.Mesh;
+    private radius: number;
 
     constructor(props: Props){
         super(props);
@@ -32,6 +34,7 @@ class Globe extends React.Component<Props, State> {
             windowWidth: window.innerWidth,
             windowHeight: window.innerHeight
         };
+        this.radius = 6.371;
         this.globeModel = this.genModel();
         this.container = React.createRef();
     }
@@ -50,25 +53,68 @@ class Globe extends React.Component<Props, State> {
         param: location Location, lat, lng and altitute
         returns: point SpherePoint, x, y, z
     */
-    locationToSphereCoord(location: Location){
-        // TODO Some maths stuff
-        let r: number = 6.371;
-        const lat = this.degree2rad(location.lat);
-        const lng = this.degree2rad(location.lng)
-        const x = r * Math.cos(lng) * Math.cos(lat);
-        const y = r * Math.cos(lng) * Math.sin(lat);
-        const z = r * Math.sin(lng);
-        let point = new THREE.Vector3(x, y, z);
+    locationToSphereCoord(location: Location, altitude: number = 0){
+        const DEGREE_TO_RADIAN = Math.PI/180
+
+        const lat = location.lat;
+        const lng = location.lng
+        const r = this.radius + altitude;
+        const phi = (90 - lat) * DEGREE_TO_RADIAN;
+        const theta = (lng + 180) * DEGREE_TO_RADIAN;
+      
+        let point = new THREE.Vector3(
+          - r * Math.sin(phi) * Math.cos(theta),
+          r * Math.cos(phi),
+          r * Math.sin(phi) * Math.sin(theta)
+        );
 
         return point
     }
 
-    degree2rad(val: number){
-        return Math.PI/180 * val;
+    clamp(num: number, min: number, max: number) {
+        return num <= min ? min : (num >= max ? max : num);
     }
 
+    getSplineFromLocations(start: Location, end: Location){
+        const CURVE_MIN_ALTITUDE = 2;
+        const CURVE_MAX_ALTITUDE = 20;
+
+        const startPoint = this.locationToSphereCoord(start);
+        const endPoint = this.locationToSphereCoord(end);
+
+        // altitude
+        const altitude = this.clamp(startPoint.distanceTo(endPoint) * .75, CURVE_MIN_ALTITUDE, CURVE_MAX_ALTITUDE);
+
+        // 2 control points
+        const interpolate = d3.geoInterpolate([start.lng, start.lat], [end.lng, end.lat]);
+        let midCoord1: Location = this.d3ToLocation(interpolate(0.25));
+        let midCoord2: Location = this.d3ToLocation(interpolate(0.75));
+
+        console.log(midCoord1);
+
+        const mid1 = this.locationToSphereCoord(midCoord1, altitude);
+        const mid2 = this.locationToSphereCoord(midCoord2, altitude);
+
+        return {
+            startPoint,
+            endPoint,
+            spline: new THREE.CubicBezierCurve3(startPoint, mid1, mid2, endPoint)
+        };
+    }
+
+    d3ToLocation(d3Coord: any){
+        const location: Location = {
+            lat: d3Coord[1],
+            lng: d3Coord[0],
+            altitude: 0
+        };
+        return location 
+    }
+
+
+
     genModel(){
-        const geometry = new THREE.SphereGeometry(6.371, 50, 50,0, Math.PI * 2, 0, Math.PI * 2);       
+        const geometry = new THREE.SphereGeometry(this.radius, 50, 50,0, Math.PI * 2, 0, Math.PI * 2);       
         var material = new THREE.MeshNormalMaterial();
         const edges = new THREE.EdgesGeometry(geometry);
         // new THREE.LineBasicMaterial( { color: 0xBF616A });
@@ -137,22 +183,23 @@ class Globe extends React.Component<Props, State> {
         }
 
 
-        const testPoint = this.locationToSphereCoord(testLocation);
-        const testPoint1 = this.locationToSphereCoord(london);
-
-        console.log("Sphere point:" + JSON.stringify(testPoint));
         camera.position.z = 12;
 
-        var dotGeometry = new THREE.Geometry();
-        dotGeometry.vertices.push(testPoint);
-        dotGeometry.vertices.push(testPoint1);
 
-        var dotMaterial = new THREE.PointsMaterial( { size: 10, sizeAttenuation: false } );
-        var dot = new THREE.Points( dotGeometry, dotMaterial );
-        scene.add(dot);
+        const curve = this.getSplineFromLocations(center, london);
 
+        var points = curve.spline.getPoints( 50 );
+        var geometry = new THREE.BufferGeometry().setFromPoints( points );
 
-        const controls = new TrackballControls(camera);
+        var material = new THREE.LineBasicMaterial( { color : 0xff0000 } );
+
+        // Create the final object to add to the scene
+        var curveObject = new THREE.Line( geometry, material );
+        scene.add(curveObject);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true
+        controls.dampingFactor = 0.25
 
         scene.add(new THREE.AmbientLight(0x333333));
 
@@ -177,7 +224,7 @@ class Globe extends React.Component<Props, State> {
             camera.aspect = width / height;
             camera.updateProjectionMatrix();
             // Sphere rotation
-            // globe.rotation.y += 0.001;
+            globe.rotation.y += 1;
             // Update rederer size and render
             renderer.setSize(width, height);
             renderer.render( scene, camera );

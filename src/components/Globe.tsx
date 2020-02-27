@@ -19,13 +19,14 @@ interface State {
 interface Location {
     lat: number;
     lng: number;
-    altitude: number;
+    altitude?: number;
 }
 
 class Globe extends React.Component<Props, State> {
     private container: React.RefObject<HTMLDivElement>
     private globeModel: THREE.Mesh;
     private radius: number;
+
 
     constructor(props: Props){
         super(props);
@@ -35,8 +36,8 @@ class Globe extends React.Component<Props, State> {
             windowHeight: window.innerHeight
         };
         this.radius = 6.371;
-        this.globeModel = this.genModel();
         this.container = React.createRef();
+        this.globeModel = this.genModel();
     }
 
     render() {
@@ -62,7 +63,7 @@ class Globe extends React.Component<Props, State> {
         const phi = (90 - lat) * DEGREE_TO_RADIAN;
         const theta = (lng + 180) * DEGREE_TO_RADIAN;
       
-        let point = new THREE.Vector3(
+        const point = new THREE.Vector3(
           - r * Math.sin(phi) * Math.cos(theta),
           r * Math.cos(phi),
           r * Math.sin(phi) * Math.sin(theta)
@@ -76,8 +77,8 @@ class Globe extends React.Component<Props, State> {
     }
 
     getSplineFromLocations(start: Location, end: Location){
-        const CURVE_MIN_ALTITUDE = 2;
-        const CURVE_MAX_ALTITUDE = 20;
+        const CURVE_MIN_ALTITUDE = 0.4;
+        const CURVE_MAX_ALTITUDE = 1;
 
         const startPoint = this.locationToSphereCoord(start);
         const endPoint = this.locationToSphereCoord(end);
@@ -87,8 +88,8 @@ class Globe extends React.Component<Props, State> {
 
         // 2 control points
         const interpolate = d3.geoInterpolate([start.lng, start.lat], [end.lng, end.lat]);
-        let midCoord1: Location = this.d3ToLocation(interpolate(0.25));
-        let midCoord2: Location = this.d3ToLocation(interpolate(0.75));
+        const midCoord1: Location = this.d3ToLocation(interpolate(0.25));
+        const midCoord2: Location = this.d3ToLocation(interpolate(0.75));
 
         console.log(midCoord1);
 
@@ -114,16 +115,18 @@ class Globe extends React.Component<Props, State> {
 
 
     genModel(){
-        const geometry = new THREE.SphereGeometry(this.radius, 50, 50,0, Math.PI * 2, 0, Math.PI * 2);       
-        var material = new THREE.MeshNormalMaterial();
-        const edges = new THREE.EdgesGeometry(geometry);
-        // new THREE.LineBasicMaterial( { color: 0xBF616A });
-        return new THREE.Mesh(geometry, material);
-        
+        var geometry   = new THREE.SphereGeometry(this.radius, 32, 32)
+        var material  = new THREE.MeshPhongMaterial()
+        material.map    = THREE.ImageUtils.loadTexture('/water_16k.png')
+        material.bumpMap = THREE.ImageUtils.loadTexture('/elev_bump_16k.jpg')
+        material.bumpScale = 16 * 0.05
+        var mesh = new THREE.Mesh(geometry, material)
+        return mesh;
+
     }
 
-    handleResize = (e: Event) => {
-        console.log("Window resize detected");
+    handleResize(e: Event) {
+        console.log(this);
         this.setState({ 
             windowWidth: window.innerWidth,
             windowHeight: window.innerHeight
@@ -134,7 +137,7 @@ class Globe extends React.Component<Props, State> {
         // TODO : Add WebGL detection
         console.log("Component mounted");
         // Handle resize events
-        window.addEventListener('resize', this.handleResize);
+        window.addEventListener('resize', this.handleResize.bind(this));
 
         // Grab the container dom ref
         let container = this.container.current;
@@ -148,64 +151,54 @@ class Globe extends React.Component<Props, State> {
         const height = this.state.windowHeight;
 
         // Scene creation
-        let scene = new THREE.Scene();
+        const scene = new THREE.Scene();
         // Camera definition
-        let camera = new THREE.PerspectiveCamera(75, width/height, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(75, width/height, 0.1, 1000);
+        camera.position.z = 12;
         // Renderer definition
-        let renderer = new THREE.WebGLRenderer();
-        let bgColor = new THREE.Color("#3B4252");
+        const renderer = new THREE.WebGLRenderer();
+        const bgColor = new THREE.Color("#2E3440");
         renderer.setClearColor(bgColor, 1)
 
         // Add the container to the renderer element
         container.appendChild(renderer.domElement);
 
-        let globe = this.globeModel;
+        const globe = this.globeModel;
         // Add the globe model to the scene
         scene.add(globe);
-
-        // Point plotting test
-        const testLocation: Location = {
-            lat: 10,
-            lng: 10,
-            altitude: 0
-        }
-
-        const center: Location = {
-            lat: 0,
-            lng: 0,
-            altitude: 0
-        }
-
+        
         const london: Location = {
             lat: 51.5074,
-            lng: 0.1278,
-            altitude: 0
+            lng: 0.1278
         }
 
+        const madrid: Location = {
+            lat: 40.4378,
+            lng: -3.8196
+        }
 
-        camera.position.z = 12;
+        const curve = this.getSplineFromLocations(london, madrid);
 
+        const points = curve.spline.getPoints(50);
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
 
-        const curve = this.getSplineFromLocations(center, london);
-
-        var points = curve.spline.getPoints( 50 );
-        var geometry = new THREE.BufferGeometry().setFromPoints( points );
-
-        var material = new THREE.LineBasicMaterial( { color : 0xff0000 } );
+        const material = new THREE.LineBasicMaterial( { 
+            color : 0xE5E9F0,
+            linewidth: 4,
+         } );
 
         // Create the final object to add to the scene
-        var curveObject = new THREE.Line( geometry, material );
+        const curveObject = new THREE.Line(geometry, material);
         scene.add(curveObject);
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true
         controls.dampingFactor = 0.25
 
-        scene.add(new THREE.AmbientLight(0x333333));
+        // scene.add(new THREE.AmbientLight(0x333333));
 
-        var light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5,3,5);
-        scene.add(light);
+        var light = new THREE.HemisphereLight( 0x81A1C1, 0x5E81AC, 1 );
+        scene.add( light );
 
         /*
         Render Loop
@@ -224,7 +217,7 @@ class Globe extends React.Component<Props, State> {
             camera.aspect = width / height;
             camera.updateProjectionMatrix();
             // Sphere rotation
-            globe.rotation.y += 1;
+            // globe.rotation.y += 0.01;
             // Update rederer size and render
             renderer.setSize(width, height);
             renderer.render( scene, camera );
